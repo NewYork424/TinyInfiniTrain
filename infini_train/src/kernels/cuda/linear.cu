@@ -27,9 +27,41 @@ std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, cons
     // =================================== 作业 ===================================
     // TODO：实现CUDA上的矩阵乘法前向计算
     // REF:
+    /*
+    output = input * other
+    output[*, out_features] = input[*, in_features] * other[in_features, out_features]
+    */
     // =================================== 作业 ===================================
 
-    auto output = std::make_shared<Tensor>();
+    const auto &input_dims = input->Dims();
+    const auto &other_dims = other->Dims();
+
+    CHECK_EQ(input_dims.size(), 2);
+    CHECK_EQ(other_dims.size(), 2);
+    CHECK_EQ(input_dims[1], other_dims[0]);
+
+    const int64_t bs = input_dims[0];
+    const int64_t in_features = input_dims[1];
+    const int64_t out_features = other_dims[1];
+
+    auto output = std::make_shared<Tensor>(std::vector<int64_t>{bs, out_features}, DataType::kFLOAT32, input->GetDevice());
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+
+    // output = input * other
+    // C = alpha * A * B + beta * C
+    // A = input[bs, in_features]
+    // B = other[in_features, out_features]
+    // C = output[bs, out_features]
+    CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, out_features, bs, in_features, &alpha,
+                             static_cast<const float *>(other->DataPtr()), out_features,
+                             static_cast<const float *>(input->DataPtr()), in_features, &beta,
+                             static_cast<float *>(output->DataPtr()), out_features));
+
+    CUBLAS_CHECK(cublasDestroy(handle));
     return output;
 }
 
@@ -39,10 +71,59 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
     // =================================== 作业 ===================================
     // TODO：实现CUDA上的矩阵乘法反向传播
     // REF:
+    /*
+    grad_input = grad_output * other^T
+    grad_input[*, in_features] = grad_output[*, out_features] * other[out_features, in_features]^T
+
+    grad_other = input^T * grad_output
+    grad_other[*, out_features] = input[*, in_features]^T * grad_output[*, out_features]
+    */
     // =================================== 作业 ===================================
 
-    auto grad_input = std::make_shared<Tensor>();
-    auto grad_other = std::make_shared<Tensor>();
+    const auto &input_dims = input->Dims();
+    const auto &other_dims = other->Dims();
+    const auto &grad_output_dims = grad_output->Dims();
+
+    CHECK_EQ(input_dims.size(), 2);
+    CHECK_EQ(other_dims.size(), 2);
+    CHECK_EQ(grad_output_dims.size(), 2);
+    CHECK_EQ(input_dims[1], other_dims[0]);
+    CHECK_EQ(input_dims[0], grad_output_dims[0]);
+    CHECK_EQ(other_dims[1], grad_output_dims[1]);
+
+    const int64_t bs = input_dims[0];
+    const int64_t in_features = input_dims[1];
+    const int64_t out_features = other_dims[1];
+
+    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32, grad_output->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other_dims, DataType::kFLOAT32, grad_output->GetDevice());
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    cublasHandle_t handle;
+    CUBLAS_CHECK(cublasCreate(&handle));
+
+    // grad_input = grad_output * other^T
+    // C = alpha * A * B + beta * C
+    // A = grad_output[bs, out_features]
+    // B = other[out_features, in_features]
+    // C = grad_input[bs, in_features]
+    CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, in_features, bs, out_features, &alpha,
+                             static_cast<const float *>(other->DataPtr()), out_features,
+                             static_cast<const float *>(grad_output->DataPtr()), out_features, &beta,
+                             static_cast<float *>(grad_input->DataPtr()), in_features));
+
+    // grad_other = input^T * grad_output
+    // C = alpha * A * B + beta * C
+    // A = input[in_features, bs]^T
+    // B = grad_output[bs, out_features]
+    // C = grad_other[in_features, out_features]
+    CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, out_features, in_features, bs, &alpha,
+                             static_cast<const float *>(grad_output->DataPtr()), out_features,
+                             static_cast<const float *>(input->DataPtr()), in_features, &beta,
+                             static_cast<float *>(grad_other->DataPtr()), out_features));
+
+    CUBLAS_CHECK(cublasDestroy(handle));
     return {grad_input, grad_other};
 }
 

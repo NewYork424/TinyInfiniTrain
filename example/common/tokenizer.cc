@@ -78,6 +78,28 @@ Tokenizer::Tokenizer(const std::string &filepath) {
     | magic(4B) | version(4B) | vocab_size(4B) | reserved(1012B) | token词表数据       |
     ----------------------------------------------------------------------------------
     ===================================== 作业 ===================================== */
+    std::ifstream ifs(filepath, std::ios::binary);
+    CHECK(ifs.is_open()) << "Failed to open tokenizer file: " << filepath;
+
+    // Read header
+    auto header_bytes = ReadSeveralBytesFromIfstream(1024, &ifs);
+    magic_number_ = BytesToType<uint32_t>(header_bytes, 0);
+    // uint32_t version = BytesToType<uint32_t>(header_bytes, 4); // version is not a member
+    vocab_size_ = BytesToType<uint32_t>(header_bytes, 8);
+
+    // Set EOT token
+    CHECK(kEotMap.count(magic_number_)) << "Unknown magic number: " << magic_number_;
+    eot_token_ = kEotMap.at(magic_number_);
+
+    // Read vocab table
+    token_table_.resize(vocab_size_);
+    for (uint32_t i = 0; i < vocab_size_; ++i) {
+        uint32_t len;
+        ifs.read(reinterpret_cast<char *>(&len), sizeof(len));
+        std::string token(len, '\0');
+        ifs.read(&token[0], len);
+        token_table_[i] = token;
+    }
 }
 
 std::string Tokenizer::Decode(uint32_t token_id) const {
@@ -85,7 +107,10 @@ std::string Tokenizer::Decode(uint32_t token_id) const {
     TODO：实现token_id到文本的转换
     功能描述：根据token_id返回对应的文本片段
     ===================================== 作业 ===================================== */
-    return "";
+    if (token_id < vocab_size_) {
+        return token_table_[token_id];
+    }
+    return "[UNKNOWN]";
 }
 
 void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_size, uint32_t sequence_length,
@@ -111,6 +136,30 @@ void Tokenizer::GenerateText(infini_train::nn::Module &model, uint32_t batch_siz
         TODO：实现单步文本生成逻辑
         HINT：调用model.Forward推理获取logits，根据推理结果进行随机采样，调用Decode获取文本结果
         ===================================== 作业 ===================================== */
+        // 前向推理获取 logits
+        auto output = model.Forward({x});
+        auto logits = output[0];
+
+        // 获取最后一个位置的 logits
+        auto last_logits = logits->Slice(1, sequence_length - 1, sequence_length);
+
+        // 应用 softmax 得到概率分布
+        auto probs = infini_train::nn::function::Softmax(last_logits, 2);
+
+        // 随机采样
+        float *probs_ptr = static_cast<float *>(probs->DataPtr());
+        float coin = RandomF32(kRngState);
+        int next_token = SampleMult(probs_ptr, vocab_size_, coin);
+
+        // 更新输入序列（向左移动一位，添加新生成的token）
+        int64_t *x_ptr = static_cast<int64_t *>(x->DataPtr());
+        for (int i = 0; i < sequence_length - 1; ++i) {
+            x_ptr[i] = x_ptr[i + 1];
+        }
+        x_ptr[sequence_length - 1] = next_token;
+
+        // 解码并输出
+        std::cout << Decode(next_token) << std::flush;
     }
     std::cout << std::endl;
 }

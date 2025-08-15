@@ -14,10 +14,29 @@ std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, cons
     // =================================== 作业 ===================================
     // TODO：实现CPU上的矩阵乘法前向计算
     // REF:
+    /*
+    output = input * other
+    output[*, out_features] = input[*, in_features] * other[in_features, out_features]
+    */
     // =================================== 作业 ===================================
 
-    auto output = std::make_shared<Tensor>();
-    return {output};
+    const auto &input_dims = input->Dims();
+    CHECK_GE(input_dims.size(), 2);
+    const int64_t bs = std::accumulate(input_dims.rbegin() + 1, input_dims.rend(), 1, std::multiplies<int64_t>{});
+    const int64_t in_features = *input_dims.rbegin();
+
+    const auto &other_dims = other->Dims();
+    CHECK_EQ(other_dims.size(), 2);
+    CHECK_EQ(in_features, other_dims[0]);
+    const int out_features = other_dims[1];
+
+    auto output_dims = input_dims;
+    *output_dims.rbegin() = out_features;
+    auto output = std::make_shared<Tensor>(output_dims, DataType::kFLOAT32);
+
+    output->EigenMatrix() = input->EigenMatrix() * other->EigenMatrix();
+
+    return output;
 }
 
 std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
@@ -26,10 +45,29 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
     // =================================== 作业 ===================================
     // TODO：实现CPU上的矩阵乘法反向传播
     // REF:
+    /*
+    grad_input = grad_output * other^T
+    grad_input[*, in_features] = grad_output[*, out_features] * other[out_features, in_features]^T
+
+    grad_other = input^T * grad_output
+    grad_other[*, out_features] = input[*, in_features]^T * grad_output[*, out_features]
+    */
     // =================================== 作业 ===================================
 
-    auto grad_input = std::make_shared<Tensor>();
-    auto grad_other = std::make_shared<Tensor>();
+    const auto &input_dims = input->Dims();
+    CHECK_GE(input_dims.size(), 2);
+    const int64_t bs = std::accumulate(input_dims.rbegin() + 1, input_dims.rend(), 1, std::multiplies<int64_t>{});
+    const int64_t in_features = *input_dims.rbegin();
+
+    const auto &other_dims = other->Dims();
+    CHECK_EQ(other_dims.size(), 2);
+    CHECK_EQ(in_features, other_dims[0]);
+    const int out_features = other_dims[1];
+
+    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32);
+    auto grad_other = std::make_shared<Tensor>(other_dims, DataType::kFLOAT32);
+    grad_input->EigenMatrix() = grad_output->EigenMatrix() * other->EigenMatrix().transpose();
+    grad_other->EigenMatrix() = input->EigenMatrix().transpose() * grad_output->EigenMatrix();
     return {grad_input, grad_other};
 }
 

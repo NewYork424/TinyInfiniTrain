@@ -281,9 +281,33 @@ std::shared_ptr<Tensor> Tensor::Flatten(int64_t start, int64_t end) {
     // =================================== 作业 ===================================
     // TODO：实现张量扁平化操作，将指定维度范围[start, end]内的所有维度合并为一个维度
     // HINT:
+    // 1. 确保start和end在合法范围内
+    // 2. 计算新的形状
+    // 3. 使用View方法返回新的张量
     // =================================== 作业 ===================================
 
-    return std::make_shared<Tensor>();
+    if (start < 0) start += dims_.size();
+    if (end < 0) end += dims_.size();
+    CHECK_GE(start, 0);
+    CHECK_LT(end, dims_.size());
+    CHECK_LE(start, end);
+
+    std::vector<int64_t> new_shape;
+    for (int64_t i = 0; i < start; ++i) {
+        new_shape.push_back(dims_[i]);
+    }
+
+    int64_t flattened_dim = 1;
+    for (int64_t i = start; i <= end; ++i) {
+        flattened_dim *= dims_[i];
+    }
+    new_shape.push_back(flattened_dim);
+
+    for (int64_t i = end + 1; i < dims_.size(); ++i) {
+        new_shape.push_back(dims_[i]);
+    }
+
+    return Contiguous()->View(new_shape);
 }
 
 std::shared_ptr<Tensor> Tensor::Squeeze(int64_t dim) {
@@ -356,8 +380,23 @@ std::shared_ptr<Tensor> Tensor::RequiresGrad() {
 void Tensor::Backward(std::shared_ptr<Tensor> gradient, bool retain_graph, bool create_graph) const {
     // =================================== 作业 ===================================
     // TODO：实现自动微分反向传播
+    //REF: https://zhuanlan.zhihu.com/p/97045053
     // 功能描述：1. 计算当前张量对叶子节点的梯度    2. 支持多输出场景的梯度累加
     // =================================== 作业 ===================================
+    CHECK(requires_grad_) << "Cannot call backward on a tensor that does not require grad.";
+    CHECK(grad_fn_ != nullptr) << "Cannot call backward on a leaf tensor.";
+
+    // 初始梯度：如果未提供，则创建一个全为1的梯度张量
+    if (gradient == nullptr) {
+        CHECK_EQ(num_elements_, 1) << "grad can be implicitly created only for scalar outputs";
+        gradient = std::make_shared<Tensor>(dims_, dtype_, GetDevice());
+        gradient->Fill(1.0f);
+    }
+    CHECK(gradient->Dims() == dims_) << "Gradient shape must match tensor shape";
+
+    // 启动反向传播过程
+    // 将初始梯度传递给当前张量的 grad_fn，并指定是哪个输出索引
+    grad_fn_->BackwardPartial(gradient, output_idx_);
 }
 
 void Tensor::ZeroGrad() {
