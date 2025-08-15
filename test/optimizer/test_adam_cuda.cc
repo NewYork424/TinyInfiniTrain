@@ -2,6 +2,8 @@
 #include<iostream>
 #include<vector>
 
+#include "cuda_runtime_api.h"
+
 #include "gtest/gtest.h"
 #include "infini_train/include/tensor.h"
 #include "infini_train/include/device.h"
@@ -18,13 +20,14 @@ TEST(AdamOptimizerTest, BasicParameterUpdateCuda) {
     auto grad = std::make_shared<Tensor>(param->Dims(), param->Dtype());
     grad->Fill(1.0f);
     float* grad_data = static_cast<float*>(param->grad()->DataPtr());
-    std::memcpy(grad_data, grad->DataPtr(), grad->SizeInBytes());
+    cudaMemcpy(grad_data, grad->DataPtr(), grad->SizeInBytes(), cudaMemcpyDefault);
 
     optimizers::Adam optimizer({param}, 0.001f, 0.9f, 0.999f, 1e-8);
 
     optimizer.Step();
 
-    float* param_data = static_cast<float*>(param->DataPtr());
+    auto param_cpu = param->To(Device(DeviceType::kCPU, 0));
+    float* param_data = static_cast<float*>(param_cpu.DataPtr());
     for (int i = 0; i < 3; ++i) {
         EXPECT_LT(param_data[i], 1.0f); // 参数值应该减小
     }
@@ -44,7 +47,8 @@ TEST(AdamOptimizerTest, MomentumAccumulationCuda) {
     std::vector<float> param_history;
     for (int i = 0; i < 3; ++i) {
         optimizer.Step();
-        param_history.push_back(static_cast<float*>(param->DataPtr())[0]);
+        auto param_cpu = param->To(Device(DeviceType::kCPU, 0));
+        param_history.push_back(static_cast<float*>(param_cpu.DataPtr())[0]);
     }
 
     EXPECT_LT(param_history[1], param_history[0]);
