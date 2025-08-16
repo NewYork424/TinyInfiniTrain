@@ -14,29 +14,42 @@ std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, cons
     // =================================== 作业 ===================================
     // TODO：实现CPU上的矩阵乘法前向计算
     // REF:
-    /*
-    output = input * other
-    output[*, out_features] = input[*, in_features] * other[in_features, out_features]
-    */
-    // =================================== 作业 ===================================
-
     const auto &input_dims = input->Dims();
-    CHECK_GE(input_dims.size(), 2);
-    const int64_t bs = std::accumulate(input_dims.rbegin() + 1, input_dims.rend(), 1, std::multiplies<int64_t>{});
-    const int64_t in_features = *input_dims.rbegin();
-
     const auto &other_dims = other->Dims();
-    CHECK_EQ(other_dims.size(), 2);
-    CHECK_EQ(in_features, other_dims[0]);
-    const int out_features = other_dims[1];
+    CHECK_GE(input_dims.size(), 2);
+    CHECK_GE(other_dims.size(), 2);
+    CHECK_EQ(input_dims.back(), other_dims[other_dims.size() - 2]);
 
     auto output_dims = input_dims;
-    *output_dims.rbegin() = out_features;
-    auto output = std::make_shared<Tensor>(output_dims, DataType::kFLOAT32);
+    output_dims.back() = other_dims.back();
+    auto output = std::make_shared<Tensor>(output_dims, DataType::kFLOAT32, input->GetDevice());
 
-    output->EigenMatrix() = input->EigenMatrix() * other->EigenMatrix();
+    const int64_t M = input_dims[input_dims.size() - 2];
+    const int64_t K = input_dims.back();
+    const int64_t N = other_dims.back();
+
+    const int64_t num_batches = input->NumElements() / (M * K);
+    const int64_t input_matrix_size = M * K;
+    const int64_t other_matrix_size = K * N;
+    const int64_t output_matrix_size = M * N;
+
+    auto *input_data = static_cast<float *>(input->DataPtr());
+    auto *other_data = static_cast<float *>(other->DataPtr());
+    auto *output_data = static_cast<float *>(output->DataPtr());
+
+    for (int64_t i = 0; i < num_batches; ++i) {
+        Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> input_mat(
+            input_data + i * input_matrix_size, M, K);
+        Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> other_mat(
+            other_data + i * other_matrix_size, K, N);
+        Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> output_mat(
+            output_data + i * output_matrix_size, M, N);
+        output_mat = input_mat * other_mat;
+    }
 
     return output;
+    // =================================== 作业 ===================================
+    
 }
 
 std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
@@ -45,30 +58,48 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
     // =================================== 作业 ===================================
     // TODO：实现CPU上的矩阵乘法反向传播
     // REF:
-    /*
-    grad_input = grad_output * other^T
-    grad_input[*, in_features] = grad_output[*, out_features] * other[out_features, in_features]^T
-
-    grad_other = input^T * grad_output
-    grad_other[*, out_features] = input[*, in_features]^T * grad_output[*, out_features]
-    */
-    // =================================== 作业 ===================================
+    // grad_input = grad_output * other^T
+    // grad_other = input^T * grad_output
+    auto grad_input = std::make_shared<Tensor>(input->Dims(), DataType::kFLOAT32, input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other->Dims(), DataType::kFLOAT32, other->GetDevice());
 
     const auto &input_dims = input->Dims();
-    CHECK_GE(input_dims.size(), 2);
-    const int64_t bs = std::accumulate(input_dims.rbegin() + 1, input_dims.rend(), 1, std::multiplies<int64_t>{});
-    const int64_t in_features = *input_dims.rbegin();
-
     const auto &other_dims = other->Dims();
-    CHECK_EQ(other_dims.size(), 2);
-    CHECK_EQ(in_features, other_dims[0]);
-    const int out_features = other_dims[1];
+    const int64_t M = input_dims[input_dims.size() - 2];
+    const int64_t K = input_dims.back();
+    const int64_t N = other_dims.back();
 
-    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32);
-    auto grad_other = std::make_shared<Tensor>(other_dims, DataType::kFLOAT32);
-    grad_input->EigenMatrix() = grad_output->EigenMatrix() * other->EigenMatrix().transpose();
-    grad_other->EigenMatrix() = input->EigenMatrix().transpose() * grad_output->EigenMatrix();
+    const int64_t num_batches = input->NumElements() / (M * K);
+    const int64_t input_matrix_size = M * K;
+    const int64_t other_matrix_size = K * N;
+    const int64_t output_matrix_size = M * N;
+
+    auto *input_data = static_cast<float *>(input->DataPtr());
+    auto *other_data = static_cast<float *>(other->DataPtr());
+    auto *grad_output_data = static_cast<float *>(grad_output->DataPtr());
+    auto *grad_input_data = static_cast<float *>(grad_input->DataPtr());
+    auto *grad_other_data = static_cast<float *>(grad_other->DataPtr());
+
+    for (int64_t i = 0; i < num_batches; ++i) {
+        Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> input_mat(
+            input_data + i * input_matrix_size, M, K);
+        Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> other_mat(
+            other_data + i * other_matrix_size, K, N);
+        Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> grad_output_mat(
+            grad_output_data + i * output_matrix_size, M, N);
+
+        Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> grad_input_mat(
+            grad_input_data + i * input_matrix_size, M, K);
+        Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> grad_other_mat(
+            grad_other_data + i * other_matrix_size, K, N);
+
+        grad_input_mat = grad_output_mat * other_mat.transpose();
+        grad_other_mat = input_mat.transpose() * grad_output_mat;
+    }
+
     return {grad_input, grad_other};
+    // =================================== 作业 ===================================
+    
 }
 
 std::shared_ptr<Tensor> LinearForward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tensor> &weight,

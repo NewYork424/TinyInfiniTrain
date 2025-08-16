@@ -27,42 +27,51 @@ std::shared_ptr<Tensor> MatmulForward(const std::shared_ptr<Tensor> &input, cons
     // =================================== 作业 ===================================
     // TODO：实现CUDA上的矩阵乘法前向计算
     // REF:
-    /*
-    output = input * other
-    output[*, out_features] = input[*, in_features] * other[in_features, out_features]
-    */
-    // =================================== 作业 ===================================
-
     const auto &input_dims = input->Dims();
     const auto &other_dims = other->Dims();
+    CHECK_GE(input_dims.size(), 2);
+    CHECK_GE(other_dims.size(), 2);
+    const int64_t M = input_dims[input_dims.size() - 2];
+    const int64_t K = input_dims.back();
+    const int64_t N = other_dims.back();
+    CHECK_EQ(K, other_dims[other_dims.size() - 2]);
 
-    CHECK_EQ(input_dims.size(), 2);
-    CHECK_EQ(other_dims.size(), 2);
-    CHECK_EQ(input_dims[1], other_dims[0]);
+    auto output_dims = input_dims;
+    output_dims.back() = N;
+    auto output = std::make_shared<Tensor>(output_dims, DataType::kFLOAT32, input->GetDevice());
+    output->Fill<float>(0.0f);
 
-    const int64_t bs = input_dims[0];
-    const int64_t in_features = input_dims[1];
-    const int64_t out_features = other_dims[1];
+    const int64_t num_batches = input->NumElements() / (M * K);
+    const int64_t input_matrix_size = M * K;
+    const int64_t other_matrix_size = K * N;
+    const int64_t output_matrix_size = M * N;
 
-    auto output = std::make_shared<Tensor>(std::vector<int64_t>{bs, out_features}, DataType::kFLOAT32, input->GetDevice());
+    auto *input_data = static_cast<const float *>(input->DataPtr());
+    auto *other_data = static_cast<const float *>(other->DataPtr());
+    auto *output_data = static_cast<float *>(output->DataPtr());
 
-    const float alpha = 1.0f;
-    const float beta = 0.0f;
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
 
-    // output = input * other
-    // C = alpha * A * B + beta * C
-    // A = input[bs, in_features]
-    // B = other[in_features, out_features]
-    // C = output[bs, out_features]
-    CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, out_features, bs, in_features, &alpha,
-                             static_cast<const float *>(other->DataPtr()), out_features,
-                             static_cast<const float *>(input->DataPtr()), in_features, &beta,
-                             static_cast<float *>(output->DataPtr()), out_features));
+    // C = A * B (row-major) is equivalent to C^T = B^T * A^T (column-major)
+    // cuBLAS uses column-major, so we compute C = other * input
+    // A = other, B = input, C = output
+    // m = N, n = M, k = K
+    // lda = N, ldb = K, ldc = N
+    if (num_batches == 1) {
+        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, other_data, N, input_data, K,
+                                 &beta, output_data, N));
+    } else {
+        CUBLAS_CHECK(cublasSgemmStridedBatched(
+            handle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K, &alpha, other_data, N, other_matrix_size, input_data, K,
+            input_matrix_size, &beta, output_data, N, output_matrix_size, num_batches));
+    }
 
     CUBLAS_CHECK(cublasDestroy(handle));
     return output;
+    // =================================== 作业 ===================================
 }
 
 std::tuple<std::shared_ptr<Tensor>, std::shared_ptr<Tensor>>
@@ -71,60 +80,66 @@ MatmulBackward(const std::shared_ptr<Tensor> &input, const std::shared_ptr<Tenso
     // =================================== 作业 ===================================
     // TODO：实现CUDA上的矩阵乘法反向传播
     // REF:
-    /*
-    grad_input = grad_output * other^T
-    grad_input[*, in_features] = grad_output[*, out_features] * other[out_features, in_features]^T
-
-    grad_other = input^T * grad_output
-    grad_other[*, out_features] = input[*, in_features]^T * grad_output[*, out_features]
-    */
-    // =================================== 作业 ===================================
-
+    // grad_input = grad_output * other^T
+    // grad_other = input^T * grad_output
     const auto &input_dims = input->Dims();
     const auto &other_dims = other->Dims();
-    const auto &grad_output_dims = grad_output->Dims();
+    const int64_t M = input_dims[input_dims.size() - 2];
+    const int64_t K = input_dims.back();
+    const int64_t N = other_dims.back();
 
-    CHECK_EQ(input_dims.size(), 2);
-    CHECK_EQ(other_dims.size(), 2);
-    CHECK_EQ(grad_output_dims.size(), 2);
-    CHECK_EQ(input_dims[1], other_dims[0]);
-    CHECK_EQ(input_dims[0], grad_output_dims[0]);
-    CHECK_EQ(other_dims[1], grad_output_dims[1]);
+    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32, input->GetDevice());
+    auto grad_other = std::make_shared<Tensor>(other_dims, DataType::kFLOAT32, other->GetDevice());
+    grad_input->Fill<float>(0.0f);
+    grad_other->Fill<float>(0.0f);
 
-    const int64_t bs = input_dims[0];
-    const int64_t in_features = input_dims[1];
-    const int64_t out_features = other_dims[1];
+    const int64_t num_batches = input->NumElements() / (M * K);
+    const int64_t input_matrix_size = M * K;
+    const int64_t other_matrix_size = K * N;
+    const int64_t output_matrix_size = M * N;
 
-    auto grad_input = std::make_shared<Tensor>(input_dims, DataType::kFLOAT32, grad_output->GetDevice());
-    auto grad_other = std::make_shared<Tensor>(other_dims, DataType::kFLOAT32, grad_output->GetDevice());
+    auto *input_data = static_cast<const float *>(input->DataPtr());
+    auto *other_data = static_cast<const float *>(other->DataPtr());
+    auto *grad_output_data = static_cast<const float *>(grad_output->DataPtr());
+    auto *grad_input_data = static_cast<float *>(grad_input->DataPtr());
+    auto *grad_other_data = static_cast<float *>(grad_other->DataPtr());
 
-    const float alpha = 1.0f;
-    const float beta = 0.0f;
     cublasHandle_t handle;
     CUBLAS_CHECK(cublasCreate(&handle));
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
 
-    // grad_input = grad_output * other^T
-    // C = alpha * A * B + beta * C
-    // A = grad_output[bs, out_features]
-    // B = other[out_features, in_features]
-    // C = grad_input[bs, in_features]
-    CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, in_features, bs, out_features, &alpha,
-                             static_cast<const float *>(other->DataPtr()), out_features,
-                             static_cast<const float *>(grad_output->DataPtr()), out_features, &beta,
-                             static_cast<float *>(grad_input->DataPtr()), in_features));
+    // Calculate grad_input = grad_output * other^T
+    // C = grad_input (M x K), A = grad_output (M x N), B = other (K x N) -> B^T (N x K)
+    // C(M,K) = A(M,N) * B(N,K) (col-major)
+    // m=K, n=M, k=N, A=other, B=grad_output, C=grad_input
+    // lda=N, ldb=N, ldc=K
+    if (num_batches == 1) {
+        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, K, M, N, &alpha, other_data, N, grad_output_data, N,
+                                 &beta, grad_input_data, K));
+    } else {
+        CUBLAS_CHECK(cublasSgemmStridedBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N, K, M, N, &alpha, other_data, N,
+                                               other_matrix_size, grad_output_data, N, output_matrix_size, &beta,
+                                               grad_input_data, K, input_matrix_size, num_batches));
+    }
 
-    // grad_other = input^T * grad_output
-    // C = alpha * A * B + beta * C
-    // A = input[in_features, bs]^T
-    // B = grad_output[bs, out_features]
-    // C = grad_other[in_features, out_features]
-    CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, out_features, in_features, bs, &alpha,
-                             static_cast<const float *>(grad_output->DataPtr()), out_features,
-                             static_cast<const float *>(input->DataPtr()), in_features, &beta,
-                             static_cast<float *>(grad_other->DataPtr()), out_features));
+    // Calculate grad_other = input^T * grad_output
+    // C = grad_other (K x N), A = input (M x K) -> A^T (K x M), B = grad_output (M x N)
+    // C(K,N) = A(K,M) * B(M,N) (col-major)
+    // m=N, n=K, k=M, A=grad_output, B=input, C=grad_other
+    // lda=N, ldb=K, ldc=N
+    if (num_batches == 1) {
+        CUBLAS_CHECK(cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, N, K, M, &alpha, grad_output_data, N, input_data, K,
+                                 &beta, grad_other_data, N));
+    } else {
+        CUBLAS_CHECK(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, N, K, M, &alpha, grad_output_data, N,
+                                               output_matrix_size, input_data, K, input_matrix_size, &beta,
+                                               grad_other_data, N, other_matrix_size, num_batches));
+    }
 
     CUBLAS_CHECK(cublasDestroy(handle));
     return {grad_input, grad_other};
+    // =================================== 作业 ===================================
 }
 
 __global__ void BiasCopyKernel(float *output, const float *bias, int bs, int out_features) {
