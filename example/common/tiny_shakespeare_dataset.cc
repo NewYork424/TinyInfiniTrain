@@ -69,14 +69,15 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
     auto header_bytes = ReadSeveralBytesFromIfstream(1024, &file);
 
     // 解析 magic number (4 bytes)
-    uint32_t magic = BytesToType<uint32_t>(header_bytes, 8);
+    uint32_t magic = BytesToType<uint32_t>(header_bytes, 0);
     LOG(INFO) << "Parsed magic number: " << magic;
+    CHECK(kTypeMap.contains(magic)) << "Unsupported magic: " << magic;
+    TinyShakespeareType type = kTypeMap.at(magic);
 
     // 解析 version (4 bytes)
-    uint32_t version = BytesToType<uint32_t>(header_bytes, 0);
+    uint32_t version = BytesToType<uint32_t>(header_bytes, 4);
     LOG(INFO) << "Parsed version: " << version;
-    CHECK(kTypeMap.contains(version)) << "Unsupported version: " << version;
-    TinyShakespeareType type = kTypeMap.at(version);
+    
 
     // 解析 number of tokens (4 bytes)
     uint32_t num_tokens = BytesToType<uint32_t>(header_bytes, 4);
