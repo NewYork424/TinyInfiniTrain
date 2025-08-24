@@ -84,7 +84,7 @@ Tokenizer::Tokenizer(const std::string &filepath) {
     // Read header
     auto header_bytes = ReadSeveralBytesFromIfstream(1024, &ifs);
     magic_number_ = BytesToType<uint32_t>(header_bytes, 0);
-    // uint32_t version = BytesToType<uint32_t>(header_bytes, 4); // version is not a member
+    
     vocab_size_ = BytesToType<uint32_t>(header_bytes, 8);
 
     // Set EOT token
@@ -94,11 +94,12 @@ Tokenizer::Tokenizer(const std::string &filepath) {
     // Read vocab table
     token_table_.resize(vocab_size_);
     for (uint32_t i = 0; i < vocab_size_; ++i) {
-        uint32_t len;
-        ifs.read(reinterpret_cast<char *>(&len), sizeof(len));
-        std::string token(len, '\0');
-        ifs.read(&token[0], len);
-        token_table_[i] = token;
+        uint8_t len;
+        auto len_bytes = ReadSeveralBytesFromIfstream(sizeof(len), &ifs);
+        len = BytesToType<uint8_t>(len_bytes, 0);
+        auto str_bytes = ReadSeveralBytesFromIfstream(len, &ifs);
+        std::string str(str_bytes.begin(), str_bytes.end());
+        token_table_[i] = str;
     }
 }
 

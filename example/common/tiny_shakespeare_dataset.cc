@@ -66,22 +66,19 @@ TinyShakespeareFile ReadTinyShakespeareFile(const std::string &path, size_t sequ
     CHECK(file.is_open()) << "Cannot open file: " << path;
 
     // 读取 header (1024 bytes)
-    auto header_bytes = ReadSeveralBytesFromIfstream(1024, &file);
+    const auto header_bytes = ReadSeveralBytesFromIfstream(1024, &file);
 
     // 解析 magic number (4 bytes)
-    uint32_t magic = BytesToType<uint32_t>(header_bytes, 0);
-    LOG(INFO) << "Parsed magic number: " << magic;
+    const uint32_t magic = BytesToType<uint32_t>(header_bytes, 0);
     CHECK(kTypeMap.contains(magic)) << "Unsupported magic: " << magic;
-    TinyShakespeareType type = kTypeMap.at(magic);
+    const auto type = kTypeMap.at(magic);
 
     // 解析 version (4 bytes)
-    uint32_t version = BytesToType<uint32_t>(header_bytes, 4);
-    LOG(INFO) << "Parsed version: " << version;
+    const uint32_t version = BytesToType<uint32_t>(header_bytes, 4);
     
 
     // 解析 number of tokens (4 bytes)
-    uint32_t num_tokens = BytesToType<uint32_t>(header_bytes, 4);
-    LOG(INFO) << "Parsed number of tokens: " << num_tokens;
+    uint32_t num_tokens = BytesToType<uint32_t>(header_bytes, 8);
     // 计算样本数量
     size_t num_samples = num_tokens - sequence_length;
     CHECK_GT(num_samples, 0) << "Not enough tokens for the given sequence length";
@@ -116,6 +113,7 @@ TinyShakespeareDataset::TinyShakespeareDataset(const std::string &filepath, size
     text_file_ = ReadTinyShakespeareFile(filepath, sequence_length);
     num_samples_ = text_file_.dims[0] - 1;  // 减1是因为每个样本需要下一个token作为标签
     sequence_size_in_bytes_ = sequence_length * kTypeToSize.at(text_file_.type);
+    
 }
 
 std::pair<std::shared_ptr<infini_train::Tensor>, std::shared_ptr<infini_train::Tensor>>
@@ -123,6 +121,7 @@ TinyShakespeareDataset::operator[](size_t idx) const {
     CHECK_LT(idx, text_file_.dims[0] - 1);
     std::vector<int64_t> dims = std::vector<int64_t>(text_file_.dims.begin() + 1, text_file_.dims.end());
     // x: (seq_len), y: (seq_len) -> stack -> (bs, seq_len) (bs, seq_len)
+    //CHECK_GT(0, 1) << "TEST";
     return {std::make_shared<infini_train::Tensor>(text_file_.tensor, idx * sequence_size_in_bytes_, dims),
             std::make_shared<infini_train::Tensor>(text_file_.tensor, idx * sequence_size_in_bytes_ + sizeof(int64_t),
                                                    dims)};
